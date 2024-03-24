@@ -78,7 +78,6 @@ public:
     void schedule(Schedulable auto&& s, time_type delay = {});
     void schedule_i(schedulable_func_t s, time_type delay = {});
     void schedule_a(AwaitSchedulable auto&& s, time_type delay = {});
-    void schedule_handle(std::coroutine_handle<> s, time_type delay = {});
 
     void add_fd(int fd, file_ops ops);
     void del_fd(int fd);
@@ -99,6 +98,29 @@ public:
     };
     write_awaiter await_write(int fd) {
         return write_awaiter { *this, fd };
+    }
+
+    auto sleep_for(time_type delay) {
+        class awaitable {
+        public:
+            explicit awaitable(event_loop_t& loop, time_type delay) : loop_(loop), delay_(delay) { }
+
+            bool await_ready() const noexcept {
+                return false;
+            }
+
+            void await_suspend(std::coroutine_handle<> coro) const {
+                auto time = time_type::monotonic_clock() + delay_;
+                loop_.scheduled_.emplace(coro, time);
+            }
+
+            void await_resume() const noexcept { }
+        private:
+            event_loop_t& loop_;
+            time_type delay_;
+        };
+
+        return awaitable { *this, delay };
     }
 
 private:
@@ -196,7 +218,8 @@ private:
 
 class event_loop_t::schedulable_task {
 public:
-    struct promise_type {
+    class promise_type {
+    public:
         auto get_return_object() {
             return schedulable_task { std::coroutine_handle<promise_type>::from_promise(*this) };
         }
@@ -212,7 +235,12 @@ public:
         void return_void() noexcept { }
 
         // TODO: FIX EXCEPTION
-        void unhandled_exception() noexcept { }
+        void unhandled_exception() noexcept {
+            std::construct_at(std::addressof(exception_), std::current_exception());
+        }
+    
+    private:
+        std::exception_ptr exception_;
     };
 
     void schedule(event_loop_t& loop, time_type delay) {
@@ -263,11 +291,6 @@ void event_loop_t::schedule_a(AwaitSchedulable auto&& s, time_type delay) {
     task.schedule(*this, delay);
 }
 
-inline void event_loop_t::schedule_handle(std::coroutine_handle<> s, time_type delay) {
-    auto time = time_type::monotonic_clock() + delay;
-    scheduled_.emplace(s, time);
-}
-
 // global functions
 
 inline event_loop_t& get_event_loop() {
@@ -283,10 +306,10 @@ inline event_loop_t& get_event_loop() {
         return get_event_loop().func(std::forward<Args>(args)...); \
     }
 
-_FORWARD_TO_LOOP(schedule)
-_FORWARD_TO_LOOP(schedule_i)
-_FORWARD_TO_LOOP(schedule_a)
-_FORWARD_TO_LOOP(schedule_handle)
+_FORWARD_TO_LOOP(schedule);
+_FORWARD_TO_LOOP(schedule_i);
+_FORWARD_TO_LOOP(schedule_a);
+_FORWARD_TO_LOOP(sleep_for);
 
 #undef _FORWARD_TO_LOOP
 

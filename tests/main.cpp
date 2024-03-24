@@ -1,6 +1,5 @@
 #include <cstring>
 #include <iostream>
-#include "rio/async_utils.hpp"
 #include "rio/event_loop.hpp"
 #include "rio/task.hpp"
 #include <poll.h>
